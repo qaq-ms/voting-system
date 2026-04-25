@@ -8,6 +8,7 @@ const groupRoutes = require('./routes/groups');
 const adminAuthRoutes = require('./routes/admin');
 const adminPollRoutes = require('./routes/adminPolls');
 const adminUserRoutes = require('./routes/adminUsers');
+const authRoutes = require('./routes/auth');
 const { securityHeaders } = require('./middleware/security');
 const { sanitizeRequest } = require('./middleware/inputSanitizer');
 
@@ -18,6 +19,9 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(securityHeaders);
 app.use(sanitizeRequest);
+
+// 用户认证系统路由
+app.use('/api/auth', authRoutes);
 
 // SSE endpoint for real-time updates
 app.get('/api/events', (req, res) => {

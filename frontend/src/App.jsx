@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
-import Login from './components/Login'
 import PollDashboard from './components/PollDashboard'
 import GroupSelector from './components/GroupSelector'
 import AdminEntry from './components/AdminEntry'
 import ErrorBoundary from './components/ErrorBoundary'
 import ToastContainer, { useToast } from './components/Toast'
+import AuthPage from './components/AuthPage'
 
 const STORAGE_KEY = 'voting_user';
 
@@ -195,7 +195,7 @@ function App() {
   };
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px' }}>加载中...</div>;
-  if (!user) return <Login onLogin={handleLogin} />;
+  if (!user) return <AuthPage onLogin={handleLogin} />;
 
   return <AppContent user={user} toastApi={toastApi} />;
 }

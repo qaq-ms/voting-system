@@ -83,6 +83,24 @@ function getLogs() {
   `);
 }
 
+function getAllRegisteredUsers() {
+  return getAll('SELECT id, username, status, created_at, last_login FROM registered_users ORDER BY created_at DESC');
+}
+
+function disableUser(userId, modifierId, ip) {
+  const user = getRow('SELECT * FROM registered_users WHERE id = ?', [userId]);
+  if (!user) throw new Error('用户不存在');
+  run('UPDATE registered_users SET status = ? WHERE id = ?', ['disabled', userId]);
+  logAdminAction(modifierId, 'disable_user', 'user', userId, `禁用用户: ${user.username}`, ip);
+}
+
+function enableUser(userId, modifierId, ip) {
+  const user = getRow('SELECT * FROM registered_users WHERE id = ?', [userId]);
+  if (!user) throw new Error('用户不存在');
+  run('UPDATE registered_users SET status = ? WHERE id = ?', ['active', userId]);
+  logAdminAction(modifierId, 'enable_user', 'user', userId, `启用用户: ${user.username}`, ip);
+}
+
 module.exports = {
   login,
   getProfile,
@@ -90,5 +108,8 @@ module.exports = {
   updateAdmin,
   deleteAdmin,
   getAllAdmins,
-  getLogs
+  getLogs,
+  getAllRegisteredUsers,
+  disableUser,
+  enableUser
 };

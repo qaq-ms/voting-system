@@ -95,6 +95,15 @@ async function initDatabase() {
       FOREIGN KEY (poll_id) REFERENCES polls(id) ON DELETE CASCADE,
       FOREIGN KEY (option_id) REFERENCES options(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS registered_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_login DATETIME
+    );
   `);
 
   saveDatabase();
