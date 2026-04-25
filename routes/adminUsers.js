@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getRow, getAll, run, exec, transaction, logAdminAction } = require('../database');
+const eventHub = require('../eventHub');
 
 function checkPerm(adminId, perm) {
   const admin = getRow('SELECT * FROM admins WHERE id = ?', [adminId]);
@@ -52,6 +53,7 @@ router.delete('/:id', auth('manage_users'), (req, res) => {
       exec('DELETE FROM users WHERE id = ?', [userId]);
     });
     logAdminAction(req.admin.id, 'delete_user', 'user', userId, `删除用户: ${user.username}`, req.ip);
+    eventHub.notifyUserDeleted(userId);
     res.json({ message: '用户已删除' });
   } catch { res.status(500).json({ error: '删除失败' }); }
 });

@@ -4,15 +4,20 @@ const { initDatabase, getRow, getAll } = require('./database');
 const eventHub = require('./eventHub');
 const pollRoutes = require('./routes/polls');
 const userRoutes = require('./routes/users');
+const groupRoutes = require('./routes/groups');
 const adminAuthRoutes = require('./routes/admin');
 const adminPollRoutes = require('./routes/adminPolls');
 const adminUserRoutes = require('./routes/adminUsers');
+const { securityHeaders } = require('./middleware/security');
+const { sanitizeRequest } = require('./middleware/inputSanitizer');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+app.use(securityHeaders);
+app.use(sanitizeRequest);
 
 // SSE endpoint for real-time updates
 app.get('/api/events', (req, res) => {
@@ -34,14 +39,32 @@ app.get('/api/events', (req, res) => {
     eventHub.subscribers = eventHub.subscribers.filter(fn => fn !== handler);
     res.end();
   });
+
+  const userDeletedHandler = (event, data) => {
+    if (event === 'user:deleted' && data) {
+      res.write(`event: user:deleted\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+  eventHub.subscribe(userDeletedHandler);
 });
 
 // Poll sync check endpoint
 app.post('/api/polls/sync-check', (req, res) => {
-  const { userId, lastSyncTimestamp } = req.body;
+  const { userId, lastSyncTimestamp, groupId } = req.body;
   if (!userId) return res.status(400).json({ error: '缺少用户ID' });
   
-  const polls = getAll('SELECT * FROM polls ORDER BY created_at DESC');
+  let query = 'SELECT * FROM polls';
+  let params = [];
+  if (groupId && groupId !== 'all') {
+    query += ' WHERE group_id = ?';
+    params.push(parseInt(groupId));
+  } else {
+    query += ' WHERE 1=1';
+  }
+  query += ' ORDER BY created_at DESC';
+  
+  const polls = getAll(query, params);
   const newPolls = lastSyncTimestamp 
     ? polls.filter(p => new Date(p.created_at).getTime() > lastSyncTimestamp)
     : [];
@@ -57,6 +80,7 @@ app.post('/api/polls/sync-check', (req, res) => {
 // 普通用户路由
 app.use('/api/polls', pollRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/groups', groupRoutes);
 
 // 管理员系统路由（独立权限控制）
 app.use('/api/admin', adminAuthRoutes);

@@ -1,9 +1,15 @@
+const crypto = require('crypto');
+
 const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
 
 const dbPath = path.join(__dirname, 'voting.db');
 let db;
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
 
 async function initDatabase() {
   const SQL = await initSqlJs();
@@ -16,6 +22,16 @@ async function initDatabase() {
   }
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      status TEXT DEFAULT 'active',
+      created_by INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       device_id TEXT UNIQUE NOT NULL,
@@ -51,9 +67,12 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS polls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      group_id INTEGER,
       created_by INTEGER NOT NULL,
       status TEXT DEFAULT 'active',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL,
       FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE CASCADE
     );
 
@@ -80,12 +99,38 @@ async function initDatabase() {
 
   saveDatabase();
 
+  // 数据迁移：确保 polls 表包含 group_id 字段
+  try {
+    const columns = getAll('PRAGMA table_info(polls)');
+    const hasGroupId = columns.some(col => col.name === 'group_id');
+    if (!hasGroupId) {
+      db.run('ALTER TABLE polls ADD COLUMN group_id INTEGER');
+      console.log('[数据库迁移] 已为 polls 表添加 group_id 字段');
+      saveDatabase();
+    }
+  } catch (err) {
+    console.log('[数据库迁移] polls 表已包含 group_id 字段');
+  }
+
   const adminCount = getRow('SELECT COUNT(*) as count FROM admins');
   if (!adminCount || adminCount.count === 0) {
+    const defaultPassword = process.env.ADMIN_PASSWORD || 'ChangeMe123!';
     db.run(
       "INSERT INTO admins (username, password_hash, role) VALUES (?, ?, 'super_admin')",
-      ['admin', 'Debian']
+      ['admin', hashPassword(defaultPassword)]
     );
+    console.log('[安全] 初始管理员已创建，请尽快修改默认密码');
+    saveDatabase();
+  }
+
+  const groupCount = getRow('SELECT COUNT(*) as count FROM groups');
+  if (!groupCount || groupCount.count === 0) {
+    db.run("INSERT INTO groups (name, description, created_by) VALUES (?, ?, ?)",
+      ['综合讨论区', '各类话题自由讨论', 1]);
+    db.run("INSERT INTO groups (name, description, created_by) VALUES (?, ?, ?)",
+      ['技术开发', '编程、框架、工具相关话题', 1]);
+    db.run("INSERT INTO groups (name, description, created_by) VALUES (?, ?, ?)",
+      ['生活娱乐', '游戏、影视、音乐等娱乐话题', 1]);
     saveDatabase();
   }
 
@@ -123,14 +168,15 @@ function getAll(sql, params = []) {
   return rows;
 }
 
-function exec(sql, params = []) {
+function run(sql, params = []) {
   db.run(sql, params);
+  const lastInsertRowid = getLastInsertId();
+  saveDatabase();
+  return { lastInsertRowid };
 }
 
-function run(sql, params = []) {
-  exec(sql, params);
-  saveDatabase();
-  return { lastInsertRowid: getLastInsertId() };
+function exec(sql, params = []) {
+  db.run(sql, params);
 }
 
 function transaction(fn) {
@@ -161,5 +207,5 @@ function logAdminAction(adminId, action, targetType, targetId, details, ip) {
 }
 
 module.exports = {
-  initDatabase, getRow, getAll, run, exec, runInTx, transaction, saveDatabase, logAdminAction
+  initDatabase, getRow, getAll, run, exec, runInTx, transaction, saveDatabase, logAdminAction, hashPassword
 };

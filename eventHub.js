@@ -3,8 +3,16 @@ const EventEmitter = require('events');
 class EventHub extends EventEmitter {
   constructor() {
     super();
+    this.subscribers = [];
     this.recent = [];
     this.maxRecent = 100;
+  }
+
+  subscribe(fn) {
+    this.subscribers.push(fn);
+    return () => {
+      this.subscribers = this.subscribers.filter(f => f !== fn);
+    };
   }
 
   emit(event, data) {
@@ -13,6 +21,13 @@ class EventHub extends EventEmitter {
       this.recent.pop();
     }
     super.emit(event, data);
+    this.subscribers.forEach(fn => {
+      try {
+        fn(event, data);
+      } catch (err) {
+        console.error('[EventHub] Subscriber error:', err);
+      }
+    });
   }
 
   notifyNewPoll(pollData) {
@@ -28,6 +43,14 @@ class EventHub extends EventEmitter {
       type: 'poll_status_changed',
       timestamp: Date.now(),
       data: { pollId, status }
+    });
+  }
+
+  notifyUserDeleted(userId) {
+    this.emit('user:deleted', {
+      type: 'user_deleted',
+      timestamp: Date.now(),
+      data: { userId }
     });
   }
 

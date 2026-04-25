@@ -3,7 +3,7 @@ import { useEventSource } from '../hooks/useEventSource';
 
 const CACHE_DURATION = 30000;
 const SYNC_POLL_INTERVAL = 5000;
-const cache = { data: null, timestamp: 0, lastSync: Date.now() };
+const cache = { data: {}, timestamp: 0, lastSync: Date.now() };
 
 const COLORS = [
   { bg: 'linear-gradient(90deg, #2196f3, #64b5f6)', label: '#2196f3' },
@@ -14,52 +14,77 @@ const COLORS = [
   { bg: 'linear-gradient(90deg, #00bcd4, #80deea)', label: '#00bcd4' },
 ];
 
-function PollDashboard({ user, onNewPoll }) {
+function PollDashboard({ user, groupId, onNewPoll, onBack }) {
   const [polls, setPolls] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
   const [highlightedPollId, setHighlightedPollId] = useState(null);
   const syncTimerRef = useRef(null);
-  const fetchPollsRef = useRef(null);
+
+  const cacheKey = groupId || 'all';
 
   const fetchPolls = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     try {
-      const res = await fetch(`/api/users/${user.userId}/voting-status`);
+      const url = `/api/users/${user.userId}/voting-status?groupId=${cacheKey}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 404) {
+          console.warn('[PollDashboard] 用户不存在，清除缓存');
+          localStorage.removeItem('voting_user');
+          window.location.reload();
+          return;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
-      if (res.ok && Array.isArray(data)) {
+      if (Array.isArray(data)) {
         setPolls(data);
-        cache.data = data;
+        cache.data[cacheKey] = data;
         cache.timestamp = Date.now();
         cache.lastSync = Date.now();
+      } else {
+        console.error('[PollDashboard] Invalid response format');
       }
     } catch (e) {
-      console.error('Failed to fetch polls:', e);
+      if (e.message.includes('fetch') || e.message.includes('Failed')) {
+        console.warn('[PollDashboard] 服务器连接失败，等待服务器启动');
+      } else {
+        console.error('[PollDashboard] Failed to fetch polls:', e);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user.userId]);
-
-  fetchPollsRef.current = fetchPolls;
+  }, [user.userId, cacheKey]);
 
   const handleSSEEvent = useCallback((eventType, data) => {
     if (eventType === 'poll:created') {
       cache.timestamp = 0;
-      fetchPollsRef.current?.(false);
-      onNewPoll?.(data.data);
-      if (data.data?.id) {
+      const pollGroupId = data?.data?.group_id;
+      if (!cacheKey || cacheKey === 'all' || pollGroupId?.toString() === cacheKey.toString()) {
+        fetchPolls(false);
+      }
+      onNewPoll?.(data?.data);
+      if (data?.data?.id) {
         setHighlightedPollId(data.data.id);
         setTimeout(() => setHighlightedPollId(null), 3000);
       }
     } else if (eventType === 'poll:status_changed') {
       cache.timestamp = 0;
-      fetchPollsRef.current?.(false);
+      fetchPolls(false);
+    } else if (eventType === 'user:deleted') {
+      const deletedUserId = data?.data?.userId;
+      if (deletedUserId && deletedUserId === user.userId) {
+        console.log('[PollDashboard] 当前用户已被管理员删除，强制登出');
+        localStorage.removeItem('voting_user');
+        window.location.reload();
+      }
     } else if (eventType === 'sse:max_retries') {
-      console.warn('[Sync] SSE failed, falling back to polling');
+      console.warn('[PollDashboard] SSE failed, falling back to polling');
     }
-  }, [onNewPoll]);
+  }, [fetchPolls, onNewPoll, cacheKey, user.userId]);
 
   useEventSource('/api/events', handleSSEEvent, { autoConnect: true });
 
@@ -70,22 +95,23 @@ function PollDashboard({ user, onNewPoll }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: user.userId,
-          lastSyncTimestamp: cache.lastSync
+          lastSyncTimestamp: cache.lastSync,
+          groupId: cacheKey
         })
       });
       const data = await res.json();
       if (data.syncSuccess && data.newPollCount > 0) {
         cache.timestamp = 0;
-        await fetchPollsRef.current?.(false);
+        fetchPolls(false);
       }
     } catch (e) {
-      console.error('Sync check failed:', e);
+      console.error('[PollDashboard] Sync check failed:', e);
     }
-  }, [user.userId]);
+  }, [user.userId, cacheKey, fetchPolls]);
 
   useEffect(() => {
-    if (cache.data && Date.now() - cache.timestamp < CACHE_DURATION) {
-      setPolls(cache.data);
+    if (cache.data[cacheKey] && Date.now() - cache.timestamp < CACHE_DURATION) {
+      setPolls(cache.data[cacheKey]);
       setLoading(false);
     } else {
       fetchPolls();
@@ -114,9 +140,12 @@ function PollDashboard({ user, onNewPoll }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <div className="sync-status">
-          <span className="sync-dot" />
-          <span>实时同步已启用</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button className="btn" onClick={onBack} style={{ padding: '6px 12px', fontSize: '13px' }}>← 返回</button>
+          <div className="sync-status">
+            <span className="sync-dot" />
+            <span>实时同步已启用</span>
+          </div>
         </div>
       </div>
 
@@ -240,6 +269,8 @@ const PollCard = memo(function PollCard({ pollData, user, onVoted, isHighlighted
         </h3>
         <StatusBadge hasVoted={hasVoted} />
       </div>
+
+      {poll.description && <p className="poll-desc">{poll.description}</p>}
 
       {error && <div className="error">{error}</div>}
 

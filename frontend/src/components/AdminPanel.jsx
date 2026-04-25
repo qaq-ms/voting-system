@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react';
 
 function AdminPanel({ onClose }) {
   const [tab, setTab] = useState('polls');
-  const [data, setData] = useState({ polls: [], users: [], admins: [], logs: [] });
+  const [data, setData] = useState({ polls: [], users: [], admins: [], logs: [], groups: [] });
   const [admin, setAdmin] = useState(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [showCreatePoll, setShowCreatePoll] = useState(false);
   const [showCreateAdmin, setShowCreateAdmin] = useState(false);
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(null);
 
   useEffect(() => {
     document.body.classList.add('modal-open');
@@ -26,13 +28,14 @@ function AdminPanel({ onClose }) {
 
   const fetchData = async (adminId) => {
     try {
-      const [p, u, a, l] = await Promise.all([
+      const [p, u, a, l, g] = await Promise.all([
         fetch(`/api/admin/polls/list?adminId=${adminId}`).then(r => r.ok ? r.json() : []),
         fetch(`/api/admin/users/list?adminId=${adminId}`).then(r => r.ok ? r.json() : []),
         fetch(`/api/admin/list?adminId=${adminId}`).then(r => r.ok ? r.json() : []),
-        fetch(`/api/admin/logs?adminId=${adminId}`).then(r => r.ok ? r.json() : [])
+        fetch(`/api/admin/logs?adminId=${adminId}`).then(r => r.ok ? r.json() : []),
+        fetch('/api/groups/list').then(r => r.ok ? r.json() : [])
       ]);
-      setData({ polls: p, users: u, admins: a, logs: l });
+      setData({ polls: p, users: u, admins: a, logs: l, groups: g });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -71,21 +74,135 @@ function AdminPanel({ onClose }) {
         {msg && <div className="success" style={{ margin: '12px 24px 0', padding: '8px 16px' }}>{msg}</div>}
 
         <div style={{ padding: '12px 24px', borderBottom: '1px solid #eee', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button className={`tab ${tab === 'polls' ? 'active' : ''}`} onClick={() => setTab('polls')}>议题 ({data.polls.length})</button>
+          <button className={`tab ${tab === 'groups' ? 'active' : ''}`} onClick={() => setTab('groups')}>大议题 ({data.groups.length})</button>
+          <button className={`tab ${tab === 'polls' ? 'active' : ''}`} onClick={() => setTab('polls')}>小议题 ({data.polls.length})</button>
           <button className={`tab ${tab === 'users' ? 'active' : ''}`} onClick={() => setTab('users')}>用户 ({data.users.length})</button>
           {admin.permissions?.manage_admins && <button className={`tab ${tab === 'admins' ? 'active' : ''}`} onClick={() => setTab('admins')}>管理员 ({data.admins.length})</button>}
           {admin.permissions?.view_logs && <button className={`tab ${tab === 'logs' ? 'active' : ''}`} onClick={() => setTab('logs')}>日志 ({data.logs.length})</button>}
         </div>
 
         <div className="modal-scroll">
+          {tab === 'groups' && <GroupTab data={data} admin={admin} onAction={handleAction} onCreate={() => { setEditingGroup(null); setShowGroupModal(true); }} onEdit={(g) => { setEditingGroup(g); setShowGroupModal(true); }} />}
           {tab === 'polls' && <PollTab data={data} admin={admin} onAction={handleAction} onCreate={() => setShowCreatePoll(true)} />}
           {tab === 'users' && <UserTab data={data} admin={admin} onAction={handleAction} />}
           {tab === 'admins' && <AdminTab data={data} admin={admin} onAction={handleAction} onCreate={() => setShowCreateAdmin(true)} />}
           {tab === 'logs' && <LogTab data={data} />}
         </div>
 
-        {showCreatePoll && <CreatePollModal admin={admin} onClose={() => { setShowCreatePoll(false); fetchData(admin.adminId); }} onMsg={showMsg} />}
+        {showCreatePoll && <CreatePollModal admin={admin} groups={data.groups} onClose={() => { setShowCreatePoll(false); fetchData(admin.adminId); }} onMsg={showMsg} />}
         {showCreateAdmin && <CreateAdminModal admin={admin} onClose={() => { setShowCreateAdmin(false); fetchData(admin.adminId); }} onMsg={showMsg} />}
+        {showGroupModal && <GroupModal admin={admin} group={editingGroup} onClose={() => { setShowGroupModal(false); setEditingGroup(null); fetchData(admin.adminId); }} onMsg={showMsg} />}
+      </div>
+    </div>
+  );
+}
+
+function GroupTab({ data, admin, onAction, onCreate, onEdit }) {
+  const handleDelete = async (group) => {
+    const pollCount = group.pollCount || 0;
+    let msg = `确定要删除大议题「${group.name}」吗？`;
+    if (pollCount > 0) {
+      msg += `\n\n⚠️ 该分组下有 ${pollCount} 个小议题`;
+      msg += `\n删除后，这些小议题将变为无分组状态（独立议题）`;
+      msg += `\n\n此操作不可恢复，请确认是否继续？`;
+    } else {
+      msg += `\n\n此操作不可恢复，请确认是否继续？`;
+    }
+    if (window.confirm(msg)) {
+      await onAction(`/api/groups/${group.id}`);
+    }
+  };
+
+  return (
+    <>
+      <div style={{ marginBottom: '15px' }}>
+        <p style={{ fontSize: '13px', color: '#666', marginBottom: '10px' }}>
+          💡 大议题用于对小议题进行分类管理，创建小议题时可选择所属大议题
+        </p>
+        <button className="btn btn-primary" onClick={onCreate}>+ 创建大议题</button>
+      </div>
+      {data.groups.length === 0 ? <p style={{ color: '#999', textAlign: 'center' }}>暂无大议题</p> :
+        data.groups.map(g => (
+          <div key={g.id} className="card" style={{ marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <h4 style={{ margin: 0 }}>
+                  <span style={{ fontSize: '16px', marginRight: '8px' }}>📁</span>
+                  {g.name}
+                  <span style={{ fontSize: '12px', marginLeft: '8px', padding: '2px 8px', borderRadius: '10px', background: '#e8f5e9', color: '#388e3c' }}>
+                    {g.pollCount || 0} 个小议题
+                  </span>
+                </h4>
+                <p style={{ fontSize: '12px', color: '#666', margin: '4px 0 0' }}>{g.description || '暂无描述'}</p>
+                <p style={{ fontSize: '11px', color: '#999', margin: '2px 0 0' }}>创建: {new Date(g.created_at).toLocaleString('zh-CN')}</p>
+              </div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button className="btn" style={{ background: '#2196f3', color: '#fff', fontSize: '12px' }} onClick={() => onEdit(g)}>编辑</button>
+                <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={() => handleDelete(g)}>删除</button>
+              </div>
+            </div>
+          </div>
+        ))
+      }
+    </>
+  );
+}
+
+function GroupModal({ admin, group, onClose, onMsg }) {
+  const isEdit = !!group;
+  const [name, setName] = useState(group?.name || '');
+  const [description, setDescription] = useState(group?.description || '');
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null);
+    if (!name.trim()) return setErr('名称不能为空');
+    if (name.trim().length > 50) return setErr('名称不能超过50个字符');
+    setLoading(true);
+    try {
+      let res;
+      if (isEdit) {
+        res = await fetch(`/api/groups/${group.id}?adminId=${admin.adminId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), description: description.trim(), adminId: admin.adminId })
+        });
+      } else {
+        res = await fetch('/api/groups/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), description: description.trim(), adminId: admin.adminId })
+        });
+      }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error);
+      onMsg(isEdit ? '大议题已更新' : '大议题创建成功');
+      onClose();
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '400px', maxWidth: '90%' }}>
+        <h3>{isEdit ? '编辑大议题' : '创建大议题'}</h3>
+        {err && <div className="error">{err}</div>}
+        <form onSubmit={submit}>
+          <div className="form-group">
+            <label>名称</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="大议题名称" maxLength={50} />
+          </div>
+          <div className="form-group">
+            <label>描述</label>
+            <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="简要描述" rows={3} style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px', resize: 'vertical' }} />
+          </div>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
+            <button type="button" className="btn" onClick={onClose} style={{ flex: 1, background: '#e0e0e0' }}>取消</button>
+            <button type="submit" className="btn btn-primary" disabled={loading} style={{ flex: 1 }}>{loading ? '提交中...' : isEdit ? '更新' : '创建'}</button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -100,7 +217,11 @@ function PollTab({ data, admin, onAction, onCreate }) {
           <div key={p.id} className="card" style={{ marginBottom: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <div>
-                <h4 style={{ margin: 0 }}>{p.title} <span style={{ fontSize: '12px', color: p.status === 'active' ? '#4caf50' : '#f44336' }}>({p.status === 'active' ? '进行中' : '已关闭'})</span></h4>
+                <h4 style={{ margin: 0 }}>
+                  {p.group_name && <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '10px', background: '#e8f5e9', color: '#388e3c', marginRight: '8px' }}>📁 {p.group_name}</span>}
+                  {p.title} 
+                  <span style={{ fontSize: '12px', color: p.status === 'active' ? '#4caf50' : '#f44336' }}>({p.status === 'active' ? '进行中' : '已关闭'})</span>
+                </h4>
                 <p style={{ fontSize: '12px', color: '#999', margin: '4px 0 0' }}>{new Date(p.created_at).toLocaleString('zh-CN')} · {p.totalVotes}票 · {p.voterCount}人</p>
               </div>
               <div style={{ display: 'flex', gap: '6px' }}>
@@ -129,20 +250,35 @@ function UserTab({ data, onAction }) {
       <div key={u.id} className="card" style={{ marginBottom: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
           <div>
-            <h4 style={{ margin: 0 }}>{u.username} <span style={{ fontSize: '12px', color: u.status === 'active' ? '#4caf50' : '#f44336' }}>({u.status === 'active' ? '正常' : '已禁用'})</span></h4>
-            <p style={{ fontSize: '12px', color: '#999', margin: '4px 0 0' }}>注册: {new Date(u.created_at).toLocaleString('zh-CN')} · 投票: {u.voteCount}</p>
+            <h4 style={{ margin: 0 }}>
+              <span style={{ fontSize: '12px', color: '#667eea', marginRight: '8px' }}>ID: {u.id}</span>
+              {u.username}
+              <span style={{ fontSize: '12px', color: u.status === 'active' ? '#4caf50' : '#f44336', marginLeft: '8px' }}>
+                ({u.status === 'active' ? '正常' : '已禁用'})
+              </span>
+            </h4>
+            <p style={{ fontSize: '12px', color: '#999', margin: '4px 0 0' }}>设备: {u.device_id} · 注册: {new Date(u.created_at).toLocaleString('zh-CN')} · 投票: {u.voteCount}次</p>
+            {u.votes && u.votes.length > 0 && (
+              <div style={{ marginTop: '8px', padding: '8px', background: '#f5f5f5', borderRadius: '6px' }}>
+                <p style={{ fontSize: '11px', color: '#666', margin: '0 0 6px', fontWeight: 'bold' }}>📊 已投票项:</p>
+                {u.votes.map((v, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: i < u.votes.length - 1 ? '1px dashed #e0e0e0' : 'none' }}>
+                    <div>
+                      <strong style={{ fontSize: '11px', color: '#333' }}>{v.poll_title}</strong>
+                      <span style={{ fontSize: '11px', color: '#999', margin: '0 6px' }}>→</span>
+                      <span style={{ color: '#2196f3', fontWeight: 'bold', fontSize: '11px' }}>{v.voted_option}</span>
+                      <span style={{ color: '#999', marginLeft: '8px', fontSize: '10px' }}>{new Date(v.voted_at).toLocaleString('zh-CN')}</span>
+                    </div>
+                    <button className="btn" style={{ fontSize: '10px', padding: '2px 8px', background: '#ff5722', color: '#fff' }} onClick={() => onAction(`/api/admin/users/${u.id}/votes/${v.poll_id}`)}>撤销</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button className="btn" style={{ background: u.status === 'active' ? '#ff9800' : '#4caf50', color: '#fff', fontSize: '12px' }} onClick={() => onAction(`/api/admin/users/${u.id}/status`, 'PUT', { status: u.status === 'active' ? 'banned' : 'active' })}>{u.status === 'active' ? '禁用' : '启用'}</button>
             <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={() => onAction(`/api/admin/users/${u.id}`)}>删除</button>
           </div>
-        </div>
-        <button className="btn" style={{ background: '#e0e0e0', fontSize: '12px', marginTop: '8px' }} onClick={() => { const el = document.getElementById(`user-${u.id}`); el.style.display = el.style.display === 'none' ? 'block' : 'none'; }}>投票记录</button>
-        <div id={`user-${u.id}`} style={{ display: 'none', marginTop: '10px' }}>
-          {u.votes.length > 0 ? <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-            <thead><tr style={{ borderBottom: '1px solid #eee' }}><th style={{ textAlign: 'left', padding: '6px 4px' }}>议题</th><th style={{ textAlign: 'left', padding: '6px 4px' }}>选择</th><th style={{ textAlign: 'left', padding: '6px 4px' }}>时间</th><th style={{ width: '60px' }}>操作</th></tr></thead>
-            <tbody>{u.votes.map((v, i) => <tr key={i} style={{ borderBottom: '1px solid #f5f5f5' }}><td style={{ padding: '6px 4px' }}>{v.poll_title}</td><td style={{ padding: '6px 4px' }}>{v.voted_option}</td><td style={{ padding: '6px 4px', color: '#999' }}>{new Date(v.voted_at).toLocaleString('zh-CN')}</td><td><button className="btn btn-danger" style={{ fontSize: '11px', padding: '4px 8px' }} onClick={() => onAction(`/api/admin/users/${u.id}/votes/${v.poll_id}`)}>撤销</button></td></tr>)}</tbody>
-          </table> : <p style={{ color: '#999', fontSize: '13px' }}>暂无记录</p>}
         </div>
       </div>
     ));
@@ -152,21 +288,33 @@ function AdminTab({ data, admin, onAction, onCreate }) {
   return (
     <>
       <div style={{ marginBottom: '15px' }}><button className="btn btn-primary" onClick={onCreate}>+ 创建管理员</button></div>
-      {data.admins.map(a => (
-        <div key={a.id} className="card" style={{ marginBottom: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-            <div>
-              <h4 style={{ margin: 0 }}>{a.username} <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '10px', background: a.role === 'super_admin' ? '#e3f2fd' : '#f5f5f5', color: a.role === 'super_admin' ? '#1976d2' : '#666' }}>{a.role}</span></h4>
-              <p style={{ fontSize: '12px', color: '#999', margin: '4px 0 0' }}>状态: {a.status === 'active' ? '正常' : '已禁用'} · 创建: {new Date(a.created_at).toLocaleString('zh-CN')}</p>
+      {data.admins.map(a => {
+        const isSelf = admin.adminId === a.id;
+        return (
+          <div key={a.id} className={`card ${isSelf ? 'current-admin-card' : ''}`} style={{ marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <div>
+                <h4 style={{ margin: 0 }}>
+                  {a.username}{' '}
+                  <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '10px', background: a.role === 'super_admin' ? '#e3f2fd' : '#f5f5f5', color: a.role === 'super_admin' ? '#1976d2' : '#666' }}>
+                    {a.role}
+                  </span>
+                  {isSelf && <span style={{ fontSize: '11px', color: '#667eea', marginLeft: '8px' }}>(当前账户)</span>}
+                </h4>
+                <p style={{ fontSize: '12px', color: '#999', margin: '4px 0 0' }}>状态: {a.status === 'active' ? '正常' : '已禁用'} · 创建: {new Date(a.created_at).toLocaleString('zh-CN')}</p>
+              </div>
+              {!isSelf && <div style={{ display: 'flex', gap: '6px' }}>
+                <button className="btn" style={{ background: a.status === 'active' ? '#ff9800' : '#4caf50', color: '#fff', fontSize: '12px' }} onClick={() => onAction(`/api/admin/${a.id}`, 'PUT', { status: a.status === 'active' ? 'disabled' : 'active' })}>{a.status === 'active' ? '禁用' : '启用'}</button>
+                <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={() => onAction(`/api/admin/${a.id}`)}>删除</button>
+              </div>}
+              {isSelf && <div style={{ display: 'flex', gap: '6px' }}>
+                <span style={{ fontSize: '12px', color: '#999', padding: '6px 12px' }} title="无法对自己的账户执行此操作">🔒 保护中</span>
+              </div>}
             </div>
-            {admin.id !== a.id && <div style={{ display: 'flex', gap: '6px' }}>
-              <button className="btn" style={{ background: a.status === 'active' ? '#ff9800' : '#4caf50', color: '#fff', fontSize: '12px' }} onClick={() => onAction(`/api/admin/${a.id}`, 'PUT', { status: a.status === 'active' ? 'disabled' : 'active' })}>{a.status === 'active' ? '禁用' : '启用'}</button>
-              <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={() => onAction(`/api/admin/${a.id}`)}>删除</button>
-            </div>}
+            <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>权限: {Object.entries(a.permissions).map(([k, v]) => `${k}: ${v ? '✓' : '✗'}`).join(' · ')}</p>
           </div>
-          <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>权限: {Object.entries(a.permissions).map(([k, v]) => `${k}: ${v ? '✓' : '✗'}`).join(' · ')}</p>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -179,8 +327,9 @@ function LogTab({ data }) {
     </table>;
 }
 
-function CreatePollModal({ admin, onClose, onMsg }) {
+function CreatePollModal({ admin, groups, onClose, onMsg }) {
   const [title, setTitle] = useState('');
+  const [groupId, setGroupId] = useState('');
   const [opts, setOpts] = useState(['', '']);
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -195,7 +344,12 @@ function CreatePollModal({ admin, onClose, onMsg }) {
     try {
       const res = await fetch('/api/admin/polls/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), options: valid, adminId: admin.adminId })
+        body: JSON.stringify({ 
+          title: title.trim(), 
+          options: valid, 
+          adminId: admin.adminId,
+          groupId: groupId || null
+        })
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error);
@@ -213,6 +367,13 @@ function CreatePollModal({ admin, onClose, onMsg }) {
       <h3>创建议题</h3>
       {err && <div className="error">{err}</div>}
       <form onSubmit={submit}>
+        <div className="form-group">
+          <label>所属大议题</label>
+          <select value={groupId} onChange={e => setGroupId(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}>
+            <option value="">无（独立议题）</option>
+            {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </div>
         <div className="form-group"><label>标题</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="议题标题" /></div>
         {opts.map((o, i) => <div key={i} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
           <input value={o} onChange={e => setOpts(opts.map((x, j) => j === i ? e.target.value : x))} placeholder={`选项${i + 1}`} style={{ flex: 1 }} />
